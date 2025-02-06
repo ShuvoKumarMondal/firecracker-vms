@@ -2,19 +2,20 @@ package vm
 
 import (
 	"fmt"
-	"log"
 	"os/exec"
 )
 
-// CreateBridge creates a bridge with the given name and IP address
-func CreateBridge(bridgeName, bridgeIP string) error {
-	cmd := exec.Command("sudo", "ip", "link", "add", bridgeName, "type", "bridge")
+// createBridge creates a bridge with the given name and IP address
+func CreateBridge(bridgeName string, ipAddress string) error {
+
+	cmd := exec.Command("sudo", "ip", "link", "add", "name", bridgeName, "type", "bridge")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create bridge: %v", err)
 	}
 
-	cmd = exec.Command("sudo", "ip", "addr", "add", bridgeIP, "dev", bridgeName)
+	cmd = exec.Command("sudo", "ip", "addr", "add", ipAddress, "dev", bridgeName)
 	if err := cmd.Run(); err != nil {
+		// If assigning IP address fails, we need to delete the bridge
 		cmd := exec.Command("sudo", "ip", "link", "delete", bridgeName)
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to delete bridge after IP assignment failure: %v", err)
@@ -22,32 +23,30 @@ func CreateBridge(bridgeName, bridgeIP string) error {
 		return fmt.Errorf("failed to assign IP address to bridge: %v", err)
 	}
 
-	cmd = exec.Command("sudo", "ip", "link", "set", bridgeName, "up")
+	fmt.Printf("Bridge %s created and assigned IP Address %s\n", bridgeName, ipAddress)
+
+	cmd = exec.Command("sudo", "ip", "link", "set", "dev", bridgeName, "up")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to bring up bridge: %v", err)
+		return fmt.Errorf("failed to up the bridge: %v", err)
 	}
 
 	cmd = exec.Command("sudo", "iptables", "-t", "nat", "-A", "POSTROUTING", "-o", bridgeName, "-j", "MASQUERADE")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to set up the NAT rule for the bridge: %v", err)
+		return fmt.Errorf("failed to setup the NAT Rule to the bridge: %v", err)
 	}
 
+	// Enable IP forwarding
 	cmd = exec.Command("sudo", "sysctl", "-w", "net.ipv4.ip_forward=1")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to enable IP forwarding: %v", err)
 	}
 
-	cmd = exec.Command("sudo", "iptables", "-A", "FORWARD", "--in-interface", bridgeName, "--out-interface", "wlo1", "-j", "ACCEPT")
+	// Add a NAT rule for the host's network interface
+	cmd = exec.Command("sudo", "iptables", "--table", "nat", "--append", "POSTROUTING", "--out-interface", "wlo1", "-j", "MASQUERADE")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to allow forwarding from bridge to host's network interface: %v", err)
+		return fmt.Errorf("failed to add NAT rule for host's network interface: %v", err)
 	}
 
-	cmd = exec.Command("sudo", "iptables", "-A", "FORWARD", "--in-interface", "wlo1", "--out-interface", bridgeName, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to allow forwarding from host's network interface to bridge: %v", err)
-	}
-
-	log.Printf("Bridge %s created with IP %s", bridgeName, bridgeIP)
 	return nil
 }
 

@@ -27,7 +27,7 @@ func StartFirecracker(vmID, socketPath, tapName, macAddress, ipAddr, bridgeIP st
 
 	projectPath := "."
 	kernelImagePath := filepath.Join(projectPath, "resources", "vmlinux.bin")
-	rootfsPath := filepath.Join(projectPath, "resources", "rootfs.ext4")
+	rootfsPath := filepath.Join(projectPath, "resources", "ubuntu-18.04.ext4")
 
 	cfg := firecracker.Config{
 		SocketPath:      socketPath,

@@ -4,13 +4,9 @@ import (
 	"fmt"
 	"github.com/shuvo-14/firecracker-vms/vm"
 	"log"
-	"path/filepath"
 )
 
 func main() {
-	ext4File := filepath.Join("resources", "rootfs.ext4")
-	vmlinuxFile := filepath.Join("resources", "vmlinux.bin")
-
 	// Create Bridge and TAP devices
 	bridgeIP := "192.168.1.1/24"
 	bridgeName := "br0"
@@ -44,10 +40,6 @@ func main() {
 		IPAddress:  "192.168.1.3",
 		BridgeIP:   bridgeIP,
 	}
-
-	// Additional code to use ext4File and vmlinuxFile
-	fmt.Printf("Using ext4 file: %s\n", ext4File)
-	fmt.Printf("Using vmlinux file: %s\n", vmlinuxFile)
 
 	// Start Firecracker VMs
 	fmt.Println("Starting Firecracker VM1...")
