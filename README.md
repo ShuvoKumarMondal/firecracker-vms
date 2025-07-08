@@ -1,3 +1,9 @@
+Set up and configured two Firecracker MicroVMs on a host system, enabling lightweight virtualization for microservices or serverless computing.
+
+Implemented a bridge network using Linux networking tools to connect the MicroVMs, allowing them to ping each other and access external networks (e.g., ping 8.8.8.8).
+
+Gained hands-on experience with network namespaces, tap interfaces, and virtual bridges in Linux, along with Firecracker’s jailer and API socket configuration.
+
 ### Step 1: Install Firecracker
 
 If you haven't installed Firecracker yet, here’s how:
