@@ -1,7 +1,17 @@
-
+# Build output
+bin/
 vendor/
 
+# VM images, keys and runtime state — fetched by `make setup`, never committed.
+# The kernel and rootfs are tens of megabytes, and the SSH key is a private key
+# (the public Firecracker CI sample key, but secret scanners cannot tell).
+resources/
+*.ext4
+*.img
+*.bin
+*.id_rsa
+
+# Editor / OS
+.idea/
 .vscode/
-
 .DS_Store
-
