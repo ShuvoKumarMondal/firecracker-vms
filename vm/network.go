@@ -223,20 +223,44 @@ func createTap(tapName, bridgeName string) error {
 	return nil
 }
 
-// TapNames returns the deterministic tap device names for the bridge.
-func TapNames(bridgeName string) []string {
-	return []string{bridgeName + "-tap-0", bridgeName + "-tap-1"}
+// TapName returns the deterministic tap device name for VM index i (0-based).
+func TapName(bridgeName string, i int) string {
+	return fmt.Sprintf("%s-tap-%d", bridgeName, i)
 }
 
-// SetupTapNetwork creates the tap devices used by the two VMs.
-func SetupTapNetwork(bridgeName string) (string, string, error) {
-	taps := TapNames(bridgeName)
-	for i, tap := range taps {
-		if err := createTap(tap, bridgeName); err != nil {
-			return "", "", fmt.Errorf("tap for VM%d: %v", i+1, err)
+// SetupTapNetwork creates count tap devices and enslaves them to the bridge,
+// returning their names in VM order.
+func SetupTapNetwork(bridgeName string, count int) ([]string, error) {
+	if count <= 0 {
+		return nil, fmt.Errorf("vm count must be positive, got %d", count)
+	}
+	taps := make([]string, count)
+	for i := 0; i < count; i++ {
+		name := TapName(bridgeName, i)
+		if err := createTap(name, bridgeName); err != nil {
+			return nil, fmt.Errorf("tap for vm%d: %v", i+1, err)
+		}
+		taps[i] = name
+	}
+	return taps, nil
+}
+
+// tapDevices returns every tap belonging to the bridge, discovered by name
+// prefix. Teardown removes whatever exists rather than a fixed count, so a run
+// interrupted with a different -n still cleans up completely.
+func tapDevices(bridgeName string) []string {
+	prefix := bridgeName + "-tap-"
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, iface := range ifaces {
+		if strings.HasPrefix(iface.Name, prefix) {
+			out = append(out, iface.Name)
 		}
 	}
-	return taps[0], taps[1], nil
+	return out
 }
 
 // Cleanup removes every piece of host state CreateBridge and SetupTapNetwork
@@ -244,11 +268,9 @@ func SetupTapNetwork(bridgeName string) (string, string, error) {
 func Cleanup(bridgeName, ipAddress string) error {
 	var problems []string
 
-	for _, tap := range TapNames(bridgeName) {
-		if linkExists(tap) {
-			if err := sudo("ip", "link", "delete", tap); err != nil {
-				problems = append(problems, err.Error())
-			}
+	for _, tap := range tapDevices(bridgeName) {
+		if err := sudo("ip", "link", "delete", tap); err != nil {
+			problems = append(problems, err.Error())
 		}
 	}
 

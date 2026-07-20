@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Downloads the kernel, root filesystem and SSH key each microVM needs, and
-# installs the Firecracker binary if it is missing.
+# Downloads the kernel, base root filesystem and SSH key into resources/.cache,
+# and installs the Firecracker binary if it is missing.
 #
-# The rootfs is copied per VM rather than shared: both guests boot with a
-# writable root device, so a single shared image would be corrupted by
-# concurrent writes.
+# The images are cached read-only. The launcher shares the kernel across all
+# VMs and makes a writable per-VM copy of the rootfs on demand, so the number of
+# VMs is chosen at run time (-n) rather than fixed here.
 
 set -euo pipefail
 
@@ -18,7 +18,6 @@ SSHKEY_URL="https://s3.amazonaws.com/spec.ccfc.min/ci-artifacts/disks/x86_64/ubu
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RESOURCES="${REPO_ROOT}/resources"
 CACHE="${RESOURCES}/.cache"
-VMS=(vm1 vm2)
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; }
@@ -109,21 +108,10 @@ main() {
   fetch "${SSHKEY_URL}" "${CACHE}/ubuntu-18.04.id_rsa"
   verify_checksums
 
-  for name in "${VMS[@]}"; do
-    mkdir -p "${RESOURCES}/${name}"
-    # Hard-link the kernel: it is read-only and identical for both guests.
-    ln -f "${CACHE}/vmlinux.bin" "${RESOURCES}/${name}/vmlinux.bin"
-    # Copy the rootfs: each guest mounts it read-write.
-    if [[ ! -s "${RESOURCES}/${name}/ubuntu-18.04.ext4" ]]; then
-      log "creating writable rootfs for ${name}"
-      cp --reflink=auto "${CACHE}/ubuntu-18.04.ext4" "${RESOURCES}/${name}/ubuntu-18.04.ext4"
-    fi
-  done
-
   install -m 0600 "${CACHE}/ubuntu-18.04.id_rsa" "${RESOURCES}/ubuntu-18.04.id_rsa"
   install_firecracker
 
-  log "ready — run 'make run'"
+  log "ready — run 'make run' (or 'make run N=5' for five VMs)"
 }
 
 main "$@"

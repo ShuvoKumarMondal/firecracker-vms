@@ -38,12 +38,13 @@ drop_rule() {
 clean_bridge() {
   local bridge="$1" subnet="$2"
 
-  for tap in "${bridge}-tap-0" "${bridge}-tap-1"; do
-    if ip link show "${tap}" >/dev/null 2>&1; then
-      log "removing tap ${tap}"
-      sudo ip link delete "${tap}" || true
-    fi
-  done
+  # Remove every tap belonging to this bridge, discovered by name prefix, so
+  # any number of VMs (-n) is cleaned up regardless of how the run was started.
+  while read -r tap; do
+    [[ -n "${tap}" ]] || continue
+    log "removing tap ${tap}"
+    sudo ip link delete "${tap}" || true
+  done < <(ip -o link show 2>/dev/null | awk -F': ' -v p="^${bridge}-tap-" '$2 ~ p {print $2}')
 
   if [[ -n "${UPLINK}" ]]; then
     drop_rule nat POSTROUTING -s "${subnet}" -o "${UPLINK}" -j MASQUERADE
@@ -65,6 +66,6 @@ clean_bridge() {
 clean_bridge "${BRIDGE}" "${SUBNET}"
 clean_bridge "br0" "192.168.1.0/24"
 
-sudo rm -f /tmp/firecracker*.sock /tmp/firecracker*.sock.log /tmp/firecracker*.sock-metrics
+sudo rm -f /tmp/firecracker*.sock*
 
 log "host is clean"

@@ -1,5 +1,6 @@
 BINARY  := fcvms
 BIN_DIR := bin
+N       ?= 2
 export GOFLAGS := -mod=mod
 
 .DEFAULT_GOAL := help
@@ -19,17 +20,13 @@ build: ## Compile the launcher
 	go build -o $(BIN_DIR)/$(BINARY) .
 
 .PHONY: run
-run: build ## Boot both microVMs (Ctrl+C shuts them down and cleans up)
+run: build ## Boot N microVMs, default 2 (e.g. make run N=5); Ctrl+C cleans up
 	@sudo -v
-	@./$(BIN_DIR)/$(BINARY)
+	@./$(BIN_DIR)/$(BINARY) -n $(N)
 
 .PHONY: vet
 vet: ## Run go vet
 	go vet ./...
-
-.PHONY: test
-test: ## Run unit tests
-	go test ./...
 
 .PHONY: fmt
 fmt: ## Format sources
@@ -43,5 +40,5 @@ down: ## Remove leftover bridge, taps and firewall rules
 .PHONY: clean
 clean: down ## Remove build output and per-VM disk images
 	rm -rf $(BIN_DIR)
-	rm -f resources/vm*/ubuntu-18.04.ext4
-	rm -f /tmp/firecracker*.sock /tmp/firecracker*.sock.log /tmp/firecracker*.sock-metrics
+	rm -rf resources/vm*
+	rm -f /tmp/firecracker*.sock*

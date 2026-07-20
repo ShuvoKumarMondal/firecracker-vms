@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -17,18 +18,25 @@ const (
 	bridgeName = "br-fc"
 	// Not 192.168.1.1/24: that collides with the typical home LAN, where .1
 	// is usually the router. See vm.CheckSubnetConflict.
-	bridgeIP      = "10.200.0.1/24"
-	shutdownGrace = 10 * time.Second
+	bridgeIP = "10.200.0.1/24"
+	// Grace given to a guest to power off after Ctrl+Alt+Del before its VMM is
+	// force-killed. Shutdown returns as soon as the guest exits, so this is only
+	// the wait for a guest that is slow or — like the bundled CI kernel, which
+	// has no i8042 controller — ignores Ctrl+Alt+Del entirely.
+	shutdownGrace = 5 * time.Second
 )
 
 func main() {
-	if err := run(); err != nil {
+	count := flag.Int("n", 2, "number of microVMs to launch")
+	flag.Parse()
+
+	if err := run(*count); err != nil {
 		log.Printf("fatal: %v", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(count int) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -46,28 +54,14 @@ func run() error {
 		}
 	}()
 
-	tap0, tap1, err := vm.SetupTapNetwork(bridgeName)
+	taps, err := vm.SetupTapNetwork(bridgeName, count)
 	if err != nil {
 		return err
 	}
 
-	configs := []vm.VMConfig{
-		{
-			ID:         "vm1",
-			SocketPath: "/tmp/firecracker1.sock",
-			TapName:    tap0,
-			MacAddress: "AA:BB:CC:00:00:01",
-			IPAddress:  "10.200.0.2",
-			BridgeIP:   bridgeIP,
-		},
-		{
-			ID:         "vm2",
-			SocketPath: "/tmp/firecracker2.sock",
-			TapName:    tap1,
-			MacAddress: "AA:BB:CC:00:00:02",
-			IPAddress:  "10.200.0.3",
-			BridgeIP:   bridgeIP,
-		},
+	configs, err := vm.BuildConfigs(bridgeIP, taps)
+	if err != nil {
+		return err
 	}
 
 	var machines []*firecracker.Machine
