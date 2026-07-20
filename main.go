@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -10,9 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
-
-	"github.com/shuvo-14/firecracker-vms/vm"
+	"github.com/ShuvoKumarMondal/firecracker-vms/internal/firecracker"
+	"github.com/ShuvoKumarMondal/firecracker-vms/vm"
 )
 
 const (
@@ -95,7 +93,7 @@ func run() error {
 		wg.Add(1)
 		go func(id string, m *firecracker.Machine) {
 			defer wg.Done()
-			if err := m.Wait(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if err := m.Wait(); err != nil {
 				log.Printf("%s exited: %v", id, err)
 			}
 		}(configs[i].ID, m)
@@ -115,19 +113,18 @@ func run() error {
 	return nil
 }
 
-// stopAll asks each guest to power off, then makes sure the VMM processes are
-// gone.
+// stopAll asks each guest to power off, giving it a grace period before the VMM
+// is killed. Shutdown blocks until each machine's process is gone.
 func stopAll(machines []*firecracker.Machine) {
+	var wg sync.WaitGroup
 	for _, m := range machines {
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-		if err := m.Shutdown(ctx); err != nil {
-			log.Printf("graceful shutdown failed: %v", err)
-		}
-		cancel()
+		wg.Add(1)
+		go func(m *firecracker.Machine) {
+			defer wg.Done()
+			if err := m.Shutdown(context.Background(), shutdownGrace); err != nil {
+				log.Printf("%s: shutdown failed: %v", m.ID, err)
+			}
+		}(m)
 	}
-	// Give the guests a moment to finish powering off before forcing the VMMs down.
-	time.Sleep(2 * time.Second)
-	for _, m := range machines {
-		_ = m.StopVMM()
-	}
+	wg.Wait()
 }

@@ -4,18 +4,24 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
 
-	firecracker "github.com/firecracker-microvm/firecracker-go-sdk"
-	models "github.com/firecracker-microvm/firecracker-go-sdk/client/models"
-	"github.com/sirupsen/logrus"
+	"github.com/ShuvoKumarMondal/firecracker-vms/internal/firecracker"
 )
 
 // ResourcesDir holds the per-VM kernel and rootfs images.
 var ResourcesDir = "resources"
+
+// Guest sizing. Small enough to run several VMs on a laptop; the guest kernel
+// and rootfs are the same for every VM.
+const (
+	vcpuCount  = 2
+	memSizeMiB = 512
+	kernelName = "vmlinux.bin"
+	rootfsName = "ubuntu-18.04.ext4"
+)
 
 // resolve returns the absolute path to a VM resource and verifies it exists,
 // so a missing image fails here rather than inside the Firecracker API.
@@ -30,109 +36,50 @@ func resolve(vmID, name string) (string, error) {
 	return path, nil
 }
 
+// bootArgs builds the guest kernel command line, including the static network
+// configuration Firecracker hands to the guest as ip=<client>::<gw>:<mask>...
+// so the guest is addressed at boot with no DHCP server involved.
+func bootArgs(cfg VMConfig) string {
+	gateway := strings.Split(cfg.BridgeIP, "/")[0]
+	// ip=<client-ip>::<gateway>:<netmask>::<iface>:off
+	ipCfg := fmt.Sprintf("ip=%s::%s:255.255.255.0::eth0:off", cfg.IPAddress, gateway)
+	// No "ro": the root drive is attached writable, and the two must agree or
+	// the guest mounts read-only regardless.
+	return "console=ttyS0 reboot=k panic=1 pci=off " + ipCfg
+}
+
 // StartFirecracker boots a microVM described by cfg and returns the running
 // machine, which the caller must wait on or shut down.
 func StartFirecracker(ctx context.Context, cfg VMConfig) (*firecracker.Machine, error) {
-	ip, ipNet, err := net.ParseCIDR(cfg.IPAddress + "/24")
-	if err != nil {
-		return nil, fmt.Errorf("invalid IP address %q: %v", cfg.IPAddress, err)
-	}
-	ipNet.IP = ip
-
-	gateway := net.ParseIP(strings.Split(cfg.BridgeIP, "/")[0])
-	if gateway == nil {
-		return nil, fmt.Errorf("invalid bridge IP address: %s", cfg.BridgeIP)
-	}
-
-	kernelPath, err := resolve(cfg.ID, "vmlinux.bin")
+	kernelPath, err := resolve(cfg.ID, kernelName)
 	if err != nil {
 		return nil, err
 	}
-	rootfsPath, err := resolve(cfg.ID, "ubuntu-18.04.ext4")
+	rootfsPath, err := resolve(cfg.ID, rootfsName)
 	if err != nil {
 		return nil, err
 	}
 
-	// Firecracker refuses to start if the API socket already exists.
-	if err := os.Remove(cfg.SocketPath); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("remove stale socket %s: %v", cfg.SocketPath, err)
-	}
-
-	fcCfg := firecracker.Config{
-		VMID:       cfg.ID,
+	m, err := firecracker.Launch(ctx, firecracker.Config{
+		ID:         cfg.ID,
 		SocketPath: cfg.SocketPath,
-		// Files, not FIFOs: a named pipe with no reader blocks Firecracker
-		// once the pipe buffer fills.
-		LogPath:     cfg.SocketPath + ".log",
-		MetricsPath: cfg.SocketPath + "-metrics",
-		LogLevel:    "Info",
-
+		// Files, not FIFOs: a named pipe with no reader blocks the VMM once the
+		// pipe buffer fills.
+		LogPath:         cfg.SocketPath + ".log",
+		MetricsPath:     cfg.SocketPath + "-metrics",
+		ConsolePath:     cfg.SocketPath + ".console",
 		KernelImagePath: kernelPath,
-		// No "ro" here: the root drive is attached writable below, and the two
-		// must agree or the guest mounts read-only regardless.
-		KernelArgs: "console=ttyS0 reboot=k panic=1 pci=off",
-
-		MachineCfg: models.MachineConfiguration{
-			VcpuCount:  firecracker.Int64(2),
-			MemSizeMib: firecracker.Int64(512),
-			Smt:        firecracker.Bool(false),
-		},
-		Drives: []models.Drive{
-			{
-				DriveID:      firecracker.String("rootfs"),
-				PathOnHost:   firecracker.String(rootfsPath),
-				IsRootDevice: firecracker.Bool(true),
-				IsReadOnly:   firecracker.Bool(false),
-			},
-		},
-		NetworkInterfaces: []firecracker.NetworkInterface{
-			{
-				StaticConfiguration: &firecracker.StaticNetworkConfiguration{
-					MacAddress:  cfg.MacAddress,
-					HostDevName: cfg.TapName,
-					IPConfiguration: &firecracker.IPConfiguration{
-						IPAddr:  *ipNet,
-						Gateway: gateway,
-					},
-				},
-			},
-		},
-	}
-
-	// The SDK's default command builder wires firecracker to os.Stdout/Stderr,
-	// which puts the guest's serial console on our terminal. Redirect to a
-	// per-VM file; it stays open for the lifetime of the VM.
-	consolePath := cfg.SocketPath + ".console"
-	console, err := os.Create(consolePath)
+		BootArgs:        bootArgs(cfg),
+		RootDrivePath:   rootfsPath,
+		VcpuCount:       vcpuCount,
+		MemSizeMiB:      memSizeMiB,
+		TapDevice:       cfg.TapName,
+		GuestMAC:        cfg.MacAddress,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create console log %s: %v", consolePath, err)
+		return nil, err
 	}
 
-	cmd := firecracker.VMCommandBuilder{}.
-		WithBin("firecracker").
-		WithSocketPath(cfg.SocketPath).
-		WithStdout(console).
-		WithStderr(console).
-		Build(ctx)
-
-	// The SDK logs every API call at info level. Only surface warnings.
-	sdkLog := logrus.New()
-	sdkLog.SetLevel(logrus.WarnLevel)
-
-	m, err := firecracker.NewMachine(ctx, fcCfg,
-		firecracker.WithProcessRunner(cmd),
-		firecracker.WithLogger(logrus.NewEntry(sdkLog)),
-	)
-	if err != nil {
-		console.Close()
-		return nil, fmt.Errorf("create microVM %s: %v", cfg.ID, err)
-	}
-
-	if err := m.Start(ctx); err != nil {
-		console.Close()
-		return nil, fmt.Errorf("start microVM %s: %v", cfg.ID, err)
-	}
-
-	log.Printf("microVM %s running: ip=%s tap=%s console=%s", cfg.ID, cfg.IPAddress, cfg.TapName, consolePath)
+	log.Printf("microVM %s running: ip=%s tap=%s console=%s", cfg.ID, cfg.IPAddress, cfg.TapName, cfg.SocketPath+".console")
 	return m, nil
 }
